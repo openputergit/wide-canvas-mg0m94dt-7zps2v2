@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hyrowah Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" rel="stylesheet">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+    <script src="https://unpkg.com/html2pdf.js/dist/html2pdf.bundle.min.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .modal-backdrop { backdrop-filter: blur(5px); }
+        #map { height: 400px; }
+        .crosshair { cursor: crosshair; }
+        .point-marker { transition: all 0.3s ease; }
+        .point-marker:hover { transform: scale(1.2); }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <!-- Setup Modal -->
+    <div id="setupModal" class="fixed inset-0 z-50 flex items-center justify-center modal-backdrop bg-black bg-opacity-50">
+        <div class="bg-white p-8 rounded-lg shadow-xl max-w-md w-full">
+            <h2 class="text-2xl font-bold mb-6">Setup Monitoring Points</h2>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Surface Area (in hectares)</label>
+                    <input type="number" id="area-input" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                </div>
+                <p id="recommendation-text" class="text-sm text-gray-600"></p>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Number of Points to Monitor</label>
+                    <input type="number" id="points-input" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                </div>
+                <button id="start-button" disabled class="w-full bg-blue-500 text-white py-2 rounded-md hover:bg-blue-600 transition-colors disabled:bg-gray-300">
+                    Start Selecting Points
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Dashboard -->
+    <div class="container mx-auto px-4 py-6">
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">Hyrowah Dashboard</h1>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- Map Panel -->
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <h2 class="text-xl font-semibold mb-4">Map View</h2>
+                <div id="map" class="rounded-lg"></div>
+            </div>
+
+            <!-- Management Panel -->
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <h2 id="progress-header" class="text-xl font-semibold mb-4">Points Management</h2>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full">
+                        <thead>
+                            <tr>
+                                <th class="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Point #</th>
+                                <th class="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Latitude</th>
+                                <th class="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Longitude</th>
+                                <th class="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="points-table"></tbody>
+                    </table>
+                </div>
+                <div class="mt-4 flex justify-end">
+                    <button id="export-button" disabled class="bg-gray-300 text-white py-2 px-4 rounded-md transition-colors">
+                        Export to Excel
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Analysis Section -->
+        <div id="analysis-section" class="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <h2 class="text-xl font-semibold mb-4">Water Quality Index</h2>
+                <div id="wqi-gauge"></div>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <h2 class="text-xl font-semibold mb-4">Parameter Exceedance</h2>
+                <div id="exceedance-chart"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State Management
+        let targetPointCount = 0;
+        let points = [];
+        let markers = [];
+        let map;
+
+        // Initialize Map
+        function initMap() {
+            map = L.map('map').setView([9.9312, 76.2673], 12);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+            map.on('click', handleMapClick);
+        }
+
+        // Setup Modal Logic
+        document.getElementById('area-input').addEventListener('input', (e) => {
+            const area = parseFloat(e.target.value);
+            const recommended = Math.max(Math.ceil(area / 5), 1);
+            document.getElementById('recommendation-text').textContent = `Recommended Points: ${recommended}`;
+            document.getElementById('points-input').value = recommended;
+            updateStartButton();
+        });
+
+        document.getElementById('points-input').addEventListener('input', updateStartButton);
+
+        function updateStartButton() {
+            const pointsInput = document.getElementById('points-input');
+            const startButton = document.getElementById('start-button');
+            startButton.disabled = !pointsInput.value || parseInt(pointsInput.value) <= 0;
+        }
+
+        document.getElementById('start-button').addEventListener('click', () => {
+            targetPointCount = parseInt(document.getElementById('points-input').value);
+            document.getElementById('setupModal').style.display = 'none';
+            initMap();
+            renderTable();
+        });
+
+        // Map Interaction
+        function handleMapClick(e) {
+            if (points.length >= targetPointCount) return;
+            
+            const point = {
+                lat: e.latlng.lat,
+                lng: e.latlng.lng
+            };
+            
+            points.push(point);
+            const marker = L.marker(e.latlng).addTo(map);
+            markers.push(marker);
+            renderTable();
+        }
+
+        // Table Management
+        function renderTable() {
+            const table = document.getElementById('points-table');
+            table.innerHTML = '';
+            
+            points.forEach((point, index) => {
+                const row = table.insertRow();
+                row.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap">${index + 1}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${point.lat.toFixed(6)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">${point.lng.toFixed(6)}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <button onclick="deletePoint(${index})" class="text-red-600 hover:text-red-800">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </td>
+                `;
+            });
+
+            document.getElementById('progress-header').textContent = `Points Placed: ${points.length} / ${targetPointCount}`;
+            document.getElementById('export-button').disabled = points.length !== targetPointCount;
+            document.getElementById('export-button').className = points.length === targetPointCount 
+                ? 'bg-green-500 hover:bg-green-600 text-white py-2 px-4 rounded-md transition-colors'
+                : 'bg-gray-300 text-white py-2 px-4 rounded-md transition-colors';
+        }
+
+        function deletePoint(index) {
+            points.splice(index, 1);
+            map.removeLayer(markers[index]);
+            markers.splice(index, 1);
+            renderTable();
+        }
+
+        // Export Functionality
+        document.getElementById('export-button').addEventListener('click', () => {
+            const ws = XLSX.utils.json_to_sheet(points.map((p, i) => ({
+                'Point #': i + 1,
+                'Latitude': p.lat,
+                'Longitude': p.lng
+            })));
+            
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Monitoring Points");
+            XLSX.writeFile(wb, "monitoring_points.xlsx");
+        });
+    </script>
+<script>document.body.addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); return }, { passive: false })</script>
+	</body>
+</html>
